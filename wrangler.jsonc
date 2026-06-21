@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "assur",
+  "name": "insurancetestsecu",
   "compatibility_date": "2026-06-12",
   "observability": {
     "enabled": true
