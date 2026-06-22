@@ -2634,6 +2634,7 @@ app.get(`${PREFIX}/me/qr-token`, async (c) => {
     sub: user.id,
     mn: profile.memberNumber,
     iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 300, // Valid 5 min
   });
   return c.json({ token, memberNumber: profile.memberNumber });
 });
@@ -2646,11 +2647,26 @@ app.post(`${PREFIX}/auth/qr-login`, async (c) => {
     if (!allowed) return c.json({ error: "Trop de tentatives, patientez." }, 429);
     const { token } = (await c.req.json()) ?? {};
     if (!token || typeof token !== "string") return c.json({ error: "Token manquant" }, 400);
-    const payload = await verifyToken<{ sub: string; mn: string }>(token);
+    const payload = await verifyToken<{ sub: string; mn: string; exp?: number }>(token);
     if (!payload?.sub) return c.json({ error: "QR invalide ou falsifié" }, 401);
+
+    // Security: QR token must have a valid expiration and not be expired.
+    if (!payload.exp || Date.now() / 1000 > payload.exp) {
+      return c.json({ error: "QR expiré" }, 401);
+    }
+
     const profile = await kv.get(k.profile(payload.sub));
     if (!profile?.email || profile.memberNumber !== payload.mn) {
       return c.json({ error: "Identifiants membres invalides" }, 401);
+    }
+
+    // Security: Re-validate eligibility at login time.
+    if (!profile.cardActive) {
+      return c.json({ error: "Carte membre non activée", code: "card_inactive" }, 403);
+    }
+    const contracts = (await kv.get(k.contracts(payload.sub))) ?? [];
+    if (!contracts.some((ct: any) => ct.status === "active")) {
+      return c.json({ error: "Aucune souscription active", code: "no_subscription" }, 403);
     }
     const { data, error: linkErr } = await admin.auth.admin.generateLink({
       type: "magiclink", email: profile.email,
