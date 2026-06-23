@@ -37,6 +37,11 @@ const PREFIX = "/make-server-752d1a39";
 // est positionné AVANT le run pour éviter le double-fire en cas de bursts,
 // l'exécution est détachée de la requête (waitUntil ou fire-and-forget).
 const AUTO_REMINDERS_INTERVAL_MS = 15 * 60_000;
+const esc = (s: string) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
+const safeError = (c: any, msg: string, err: unknown) => {
+  console.error(`${msg}:`, err);
+  return c.json({ error: msg }, 500);
+};
 let autoRemindersInflight = false;
 async function maybeRunAutoReminders() {
   if (autoRemindersInflight) return;
@@ -729,7 +734,7 @@ async function sendInvoiceEmail(userId: string, payment: any) {
           <div style="font-size:13px;opacity:.9;margin-top:4px">${invoiceNumber} · ${dateStr}</div>
         </div>
         <div style="padding:24px 32px;color:#0E1320">
-          <p style="margin:0 0 6px;font-weight:700">Bonjour ${profile?.name ?? "membre IPPOO"},</p>
+          <p style="margin:0 0 6px;font-weight:700">Bonjour ${esc(profile?.name ?? "membre IPPOO")},</p>
           <p style="margin:0 0 16px;color:#555;font-size:14px">Votre paiement a bien été confirmé. Voici le détail de votre facture.</p>
           <table style="width:100%;border-collapse:collapse;font-size:14px">
             <tr style="background:#0E1320;color:#fff">
@@ -737,7 +742,7 @@ async function sendInvoiceEmail(userId: string, payment: any) {
               <td style="padding:10px 12px;text-align:right">Montant</td>
             </tr>
             <tr>
-              <td style="padding:10px 12px;border-bottom:1px solid #eee">${lineLabel}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #eee">${esc(lineLabel)}</td>
               <td style="padding:10px 12px;border-bottom:1px solid #eee;text-align:right;font-weight:700">${total}</td>
             </tr>
             <tr>
@@ -982,8 +987,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     }
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return safeError(c, "Erreur serveur lors de l'inscription", err);
   }
 });
 
@@ -3289,7 +3293,7 @@ app.get(`${PREFIX}/admin/member/:uid/export`, async (c) => {
       },
     });
   } catch (err) {
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, "Erreur lors de la récupération des données client", err);
   }
 });
 
@@ -5155,7 +5159,7 @@ app.post(`${PREFIX}/agent/signup`, async (c) => {
       agent: { id: uid, username: name, email, matricule },
     });
   } catch (err) {
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, "Erreur lors de la récupération des données client", err);
   }
 });
 
@@ -7135,7 +7139,7 @@ app.get(`${PREFIX}/agent/customer/:uid`, async (c) => {
       unreadNotifications: ((notifications ?? []) as any[]).filter((n) => !n.read).length,
     });
   } catch (err) {
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, "Erreur lors de la récupération de la fiche client", err);
   }
 });
 
@@ -7581,7 +7585,6 @@ app.post(`${PREFIX}/admin/kyc/:userId/:kycId/decision`, async (c) => {
       if (profile?.email) {
         const APP_URL = Deno.env.get("APP_URL") ?? "https://app.ippoo.bj";
         const link = `${APP_URL}/espace-client/kyc?reprise=1&ref=${encodeURIComponent(kycId)}`;
-        const esc = (s: string) => String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
         const safeNote = esc(note || "Pièces non lisibles ou incomplètes.");
         const html = `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:auto">
           <h2 style="color:#FF3B57">Vérification d'identité à refaire</h2>
@@ -7976,8 +7979,7 @@ app.get(`${PREFIX}/admin/export/accounting`, async (c) => {
       },
     });
   } catch (err) {
-    console.log(`Accounting export error: ${err}`);
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, "Erreur lors de l'export comptable", err);
   }
 });
 
@@ -8066,8 +8068,7 @@ app.get(`${PREFIX}/admin/export/commissions`, async (c) => {
       },
     });
   } catch (err) {
-    console.log(`Commissions export error: ${err}`);
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, "Erreur lors de l'export des commissions", err);
   }
 });
 
@@ -8169,8 +8170,7 @@ app.get(`${PREFIX}/admin/export/enrollments`, async (c) => {
       },
     });
   } catch (err) {
-    console.log(`Enrollments export error: ${err}`);
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, "Erreur lors de l'export des enrôlements", err);
   }
 });
 
@@ -8880,7 +8880,7 @@ app.post(`${PREFIX}/admin/payments/:userId/:paymentId/send-invoice`, async (c) =
   const amount = new Intl.NumberFormat("fr-FR").format(payment.amount) + " FCFA";
   const html = `<div style="font-family:system-ui,sans-serif;max-width:600px;margin:auto;padding:24px;color:#191923">
     <h1 style="color:#D84332;letter-spacing:-0.02em">FACTURE ${invNo}</h1>
-    <p>Bonjour ${profile.name || profile.firstName || "membre"},</p>
+    <p>Bonjour ${esc(profile.name || profile.firstName || "membre")},</p>
     <p>Veuillez trouver le récapitulatif de votre paiement IPPOO ASSURANCE :</p>
     <table style="width:100%;border-collapse:collapse;margin:16px 0">
       <tr><td style="padding:8px;border-bottom:1px solid #eee"><b>Date</b></td><td style="padding:8px;border-bottom:1px solid #eee">${dateStr}</td></tr>
