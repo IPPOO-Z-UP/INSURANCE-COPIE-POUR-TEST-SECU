@@ -1,0 +1,4 @@
+## 2025-05-30 - [Defense-in-Depth] Secure Randomness and Error Sanitization
+**Vulnerability:** The application used `Math.random()` for generating sensitive data like phone OTPs and unique audit/payment IDs, making them potentially predictable. Additionally, several endpoints leaked raw exception messages (including stack traces or database errors) in 500 Internal Server Error responses.
+**Learning:** Legacy patterns often favor convenience (Math.random, direct error returns) over security. Centralizing these into utility functions (`secureRandomInt`, `safeError`) makes it easier to enforce security standards across a large file like `index.tsx`.
+**Prevention:** Always use a CSPRNG (`crypto.getRandomValues`) for security-sensitive randomness. Never return raw error objects to the client; use a sanitization helper that logs the full error server-side while returning a safe, generic message to the user.

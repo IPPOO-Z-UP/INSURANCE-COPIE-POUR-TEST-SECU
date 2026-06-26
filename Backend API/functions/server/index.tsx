@@ -524,7 +524,7 @@ async function adminAudit(c: any, admin: { username: string; role?: string }, ac
   try {
     const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
-    const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `aa_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const at = new Date().toISOString();
     const prevHash = (((await kv.get(k.auditChainTip())) ?? "GENESIS") as string);
     const canonical = JSON.stringify({ id, username: admin.username, role: admin.role ?? "superadmin", action, meta, ip, ua, at });
@@ -546,7 +546,7 @@ async function audit(uid: string, action: string, meta: Record<string, any> = {}
   try {
     const list = (await kv.get(k.audit(uid))) ?? [];
     list.unshift({
-      id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `a_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
       action,
       meta,
       at: new Date().toISOString(),
@@ -559,6 +559,20 @@ async function audit(uid: string, action: string, meta: Record<string, any> = {}
   } catch (err) {
     console.log(`Audit log error for ${uid}/${action}: ${err}`);
   }
+}
+
+/** Sanitize 500 error responses to prevent internal info leakage. */
+function safeError(c: any, err: any, message = "Une erreur interne est survenue") {
+  console.log(`[error] ${message}:`, err);
+  return c.json({ error: message }, 500);
+}
+
+/** Cryptographically secure random integer in [min, max] range. */
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return min + (array[0] % range);
 }
 
 // Returns true when allowed; false when over limit. Window is rolling N seconds.
@@ -598,7 +612,7 @@ function makeReferralCode(name: string) {
 
 function notify(notifications: any[], title: string, body: string, type = "info", to?: string) {
   notifications.unshift({
-    id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    id: `n_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
     title,
     body,
     type,
@@ -982,8 +996,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     }
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return safeError(c, err, "Erreur serveur lors de l'inscription");
   }
 });
 
@@ -1041,7 +1054,7 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
@@ -1409,7 +1422,7 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
       payment = payments[idx];
     } else {
       payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
         contractId: contractId ?? null,
         amount,
         currency: "XOF",
@@ -2844,7 +2857,7 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
     await adminAudit(c, { username: acct.username, role: acct.role }, "login", { jti });
     return c.json({ token, username: acct.username, role: acct.role, expiresAt: exp * 1000 });
   } catch (err) {
-    return c.json({ error: `${err}` }, 500);
+    return safeError(c, err, "Erreur de connexion");
   }
 });
 
