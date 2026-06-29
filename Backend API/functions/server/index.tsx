@@ -281,7 +281,7 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -512,6 +512,35 @@ function webauthnContext(c: any) {
 //   - role (au moment de l'action)
 //   - ip / userAgent (forensique)
 //   - action + meta arbitraire
+// --- Security Utilities ---
+// esc: Basic HTML entity escaping to prevent XSS in emails or logs.
+function esc(s: unknown): string {
+  return String(s ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch] as string));
+}
+
+// safeError: Sanitizes error objects to avoid leaking full stack traces to clients.
+function safeError(err: unknown): string {
+  if (err instanceof Error) return err.message.slice(0, 200);
+  return String(err).slice(0, 200);
+}
+
+// secureRandomInt: Cryptographically secure random integer in [min, max] range.
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  return min + (arr[0] % range);
+}
+
+// secureRandomString: Generates a secure random string of a given length.
+function secureRandomString(len = 8, alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"): string {
+  let res = "";
+  for (let i = 0; i < len; i++) res += alphabet[secureRandomInt(0, alphabet.length - 1)];
+  return res;
+}
+
 async function sha256Hex(body: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -524,7 +553,7 @@ async function adminAudit(c: any, admin: { username: string; role?: string }, ac
   try {
     const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
-    const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `aa_${Date.now()}_${secureRandomString(4)}`;
     const at = new Date().toISOString();
     const prevHash = (((await kv.get(k.auditChainTip())) ?? "GENESIS") as string);
     const canonical = JSON.stringify({ id, username: admin.username, role: admin.role ?? "superadmin", action, meta, ip, ua, at });
@@ -546,7 +575,7 @@ async function audit(uid: string, action: string, meta: Record<string, any> = {}
   try {
     const list = (await kv.get(k.audit(uid))) ?? [];
     list.unshift({
-      id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `a_${Date.now()}_${secureRandomString(4)}`,
       action,
       meta,
       at: new Date().toISOString(),
@@ -592,13 +621,13 @@ async function guardRate(
 
 function makeReferralCode(name: string) {
   const base = (name || "IPPOO").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4).padEnd(4, "X");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const rand = secureRandomString(4, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789").toUpperCase();
   return `${base}-${rand}`;
 }
 
 function notify(notifications: any[], title: string, body: string, type = "info", to?: string) {
   notifications.unshift({
-    id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    id: `n_${Date.now()}_${secureRandomString(5)}`,
     title,
     body,
     type,
@@ -729,7 +758,7 @@ async function sendInvoiceEmail(userId: string, payment: any) {
           <div style="font-size:13px;opacity:.9;margin-top:4px">${invoiceNumber} · ${dateStr}</div>
         </div>
         <div style="padding:24px 32px;color:#0E1320">
-          <p style="margin:0 0 6px;font-weight:700">Bonjour ${profile?.name ?? "membre IPPOO"},</p>
+          <p style="margin:0 0 6px;font-weight:700">Bonjour ${esc(profile?.name ?? "membre IPPOO")},</p>
           <p style="margin:0 0 16px;color:#555;font-size:14px">Votre paiement a bien été confirmé. Voici le détail de votre facture.</p>
           <table style="width:100%;border-collapse:collapse;font-size:14px">
             <tr style="background:#0E1320;color:#fff">
@@ -737,7 +766,7 @@ async function sendInvoiceEmail(userId: string, payment: any) {
               <td style="padding:10px 12px;text-align:right">Montant</td>
             </tr>
             <tr>
-              <td style="padding:10px 12px;border-bottom:1px solid #eee">${lineLabel}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #eee">${esc(lineLabel)}</td>
               <td style="padding:10px 12px;border-bottom:1px solid #eee;text-align:right;font-weight:700">${total}</td>
             </tr>
             <tr>
@@ -983,7 +1012,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     return c.json({ ok: true });
   } catch (err) {
     console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return c.json({ error: `Erreur serveur lors de l'inscription: ${safeError(err)}` }, 500);
   }
 });
 
@@ -1041,14 +1070,14 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
     return c.json({ ok: true, sent, gated: !TERMII_KEY }, 200);
   } catch (err) {
     console.log(`OTP send error: ${err}`);
-    return c.json({ error: "Erreur lors de l'envoi du code" }, 500);
+    return c.json({ error: `Erreur lors de l'envoi du code: ${safeError(err)}` }, 500);
   }
 });
 app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
@@ -1076,7 +1105,7 @@ app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
     return c.json({ ok: true, verified: true, proof, ttlSec: 300 });
   } catch (err) {
     console.log(`OTP verify error: ${err}`);
-    return c.json({ error: "Erreur de vérification" }, 500);
+    return c.json({ error: `Erreur de vérification: ${safeError(err)}` }, 500);
   }
 });
 
@@ -1316,7 +1345,7 @@ app.post(`${PREFIX}/claims`, async (c) => {
     }
     const autoMat = await pickOnlineAgentMatricule().catch(() => null);
     const claim = {
-      id: `s_${Date.now()}`,
+      id: `s_${Date.now()}_${secureRandomString(4)}`,
       contractId: contractId ?? null,
       type,
       description,
@@ -1409,7 +1438,7 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
       payment = payments[idx];
     } else {
       payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${secureRandomString(4)}`,
         contractId: contractId ?? null,
         amount,
         currency: "XOF",
@@ -1430,7 +1459,7 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
     });
   } catch (err) {
     console.log(`Payment initiate error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur initialisation paiement: ${err}` }, 500);
+    return c.json({ error: `Erreur initialisation paiement: ${safeError(err)}` }, 500);
   }
 });
 
@@ -1649,7 +1678,7 @@ app.post(`${PREFIX}/payments`, async (c) => {
     if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
     const { contractId, amount, method } = parsed.data;
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${secureRandomString(4)}`,
       contractId: contractId ?? null,
       amount,
       currency: "XOF",
@@ -1686,7 +1715,7 @@ app.post(`${PREFIX}/beneficiaries`, async (c) => {
     if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
     const { name, relation, birthDate } = parsed.data;
     const beneficiary = {
-      id: `b_${Date.now()}`,
+      id: `b_${Date.now()}_${secureRandomString(4)}`,
       name,
       relation,
       birthDate: birthDate ?? null,
@@ -1910,7 +1939,7 @@ app.post(`${PREFIX}/messages/attachment`, async (c) => {
     if (upErr) return c.json({ error: `Upload échoué: ${upErr.message}` }, 500);
     const profile = (await kv.get(k.profile(user.id))) ?? {};
     const userMsg = {
-      id: `m_${Date.now()}`,
+      id: `m_${Date.now()}_${secureRandomString(4)}`,
       from: "user",
       author: profile.name ?? "Vous",
       body: caption,
@@ -1953,7 +1982,7 @@ app.post(`${PREFIX}/admin/messages/:uid/attachment`, async (c) => {
     const { error: upErr } = await admin.storage.from(MSG_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
     if (upErr) return c.json({ error: `Upload échoué: ${upErr.message}` }, 500);
     const msg = {
-      id: `m_${Date.now()}`,
+      id: `m_${Date.now()}_${secureRandomString(4)}`,
       from: "conseiller",
       author: `${r.admin.username} (IPPOO)`,
       body: caption,
@@ -2053,7 +2082,7 @@ app.post(`${PREFIX}/messages`, async (c) => {
     const now = new Date().toISOString();
     const replyToId = typeof (parsed.data as any).replyToId === "string" ? (parsed.data as any).replyToId : undefined;
     const userMsg: any = {
-      id: `m_${Date.now()}`,
+      id: `m_${Date.now()}_${secureRandomString(4)}`,
       from: "user",
       author: profile.name ?? "Vous",
       body: content.trim(),
@@ -2112,7 +2141,7 @@ app.post(`${PREFIX}/subscribe`, async (c) => {
     const { product, frequency } = parsed.data;
     const now = new Date().toISOString();
     const contract = {
-      id: `c_${Date.now()}`,
+      id: `c_${Date.now()}_${secureRandomString(4)}`,
       product,
       status: "active",
       startDate: now,
@@ -2138,7 +2167,7 @@ app.post(`${PREFIX}/subscribe`, async (c) => {
     return c.json({ contract });
   } catch (err) {
     console.log(`Subscribe error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur de souscription: ${err}` }, 500);
+    return c.json({ error: `Erreur de souscription: ${safeError(err)}` }, 500);
   }
 });
 
@@ -2295,7 +2324,7 @@ app.post(`${PREFIX}/contracts/:id/renew`, async (c) => {
     const publicKey = Deno.env.get("KKIAPAY_PUBLIC_KEY") ?? "";
     const mode: "kkiapay" | "mock" = publicKey ? "kkiapay" : "mock";
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${secureRandomString(4)}`,
       contractId: ct.id,
       amount: ct.premium,
       currency: ct.currency ?? "XOF",
@@ -2591,7 +2620,7 @@ app.post(`${PREFIX}/member-card/activate`, async (c) => {
     const publicKey = Deno.env.get("KKIAPAY_PUBLIC_KEY") ?? "";
     const mode: "kkiapay" | "mock" = publicKey ? "kkiapay" : "mock";
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${secureRandomString(4)}`,
       contractId: null,
       amount: BILLING.cardFee,
       currency: "XOF",
@@ -3906,7 +3935,7 @@ async function runMonthlyBillingCycle(triggeredBy: string) {
       );
       if (already) { skipped++; continue; }
       const payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${secureRandomString(4)}`,
         contractId: ct.id,
         amount: ct.premium,
         currency: ct.currency ?? "XOF",
@@ -4547,7 +4576,7 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
   if (!g.admin) return c.json({ error: g.error }, g.status);
   try {
     const email = "demo.client@ippoo.local";
-    const password = `Demo!${Math.random().toString(36).slice(2, 8)}`;
+    const password = `Demo!${secureRandomString(6)}`;
     const existingUid = await kv.get(k.emailToUid(email));
     let uid: string;
     if (existingUid) {
@@ -4581,20 +4610,20 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
     };
     await kv.set(k.contracts(uid), [contract]);
     const payment = {
-      id: `p_demo_${Date.now()}`, contractId, amount: 5000, currency: "XOF",
+      id: `p_demo_${Date.now()}_${secureRandomString(4)}`, contractId, amount: 5000, currency: "XOF",
       method: "mobile_money", status: "confirme", purpose: "monthly_premium",
       mode: "mock", createdAt: now.toISOString(), confirmedAt: now.toISOString(),
     };
     await kv.set(k.payments(uid), [payment]);
     const claim = {
-      id: `cl_demo_${Date.now()}`, contractId, type: "consultation",
+      id: `cl_demo_${Date.now()}_${secureRandomString(4)}`, contractId, type: "consultation",
       amountRequested: 12000, status: "en_cours",
       description: "Consultation cardiologie",
       createdAt: now.toISOString(),
     };
     await kv.set(k.claims(uid), [claim]);
     await setNotifications(uid, [
-      { id: `n_${Date.now()}`, title: "Compte démo prêt", body: "Toutes les données sont fictives.", type: "info", createdAt: now.toISOString(), read: false },
+      { id: `n_${Date.now()}_${secureRandomString(4)}`, title: "Compte démo prêt", body: "Toutes les données sont fictives.", type: "info", createdAt: now.toISOString(), read: false },
     ]);
     const agentEmail = "demo.agent@ippoo.local";
     const existingAgentUid = await kv.get(k.emailToUid(agentEmail));
@@ -4874,7 +4903,7 @@ app.post(`${PREFIX}/admin/messages/:uid`, async (c) => {
     if (!content) return c.json({ error: "Message vide" }, 400);
     const replyToId = typeof body?.replyToId === "string" ? body.replyToId : undefined;
     const msg: any = {
-      id: `m_${Date.now()}`,
+      id: `m_${Date.now()}_${secureRandomString(4)}`,
       from: "conseiller",
       author: `${r.admin.username} (IPPOO)`,
       body: content,
@@ -4989,7 +5018,7 @@ app.post(`${PREFIX}/agent/messages/:uid`, async (c) => {
     if (!content) return c.json({ error: "Message vide" }, 400);
     const replyToId = typeof body?.replyToId === "string" ? body.replyToId : undefined;
     const msg: any = {
-      id: `m_${Date.now()}`,
+      id: `m_${Date.now()}_${secureRandomString(4)}`,
       from: "conseiller",
       author: `${r.agent.username} · ${r.agent.matricule}`,
       body: content,
@@ -5607,7 +5636,7 @@ app.post(`${PREFIX}/agent/templates`, async (c) => {
     if (!title || !text) return c.json({ error: "Titre et contenu requis" }, 400);
     const list = ((await kv.get(k.agentTemplates(r.agent.matricule))) ?? []) as AgentTemplate[];
     if (list.length >= 30) return c.json({ error: "Maximum 30 templates" }, 400);
-    const tpl: AgentTemplate = { id: `tpl_${Date.now()}`, title, body: text, updatedAt: new Date().toISOString() };
+    const tpl: AgentTemplate = { id: `tpl_${Date.now()}_${secureRandomString(4)}`, title, body: text, updatedAt: new Date().toISOString() };
     list.unshift(tpl);
     await kv.set(k.agentTemplates(r.agent.matricule), list);
     return c.json({ template: tpl });
@@ -5919,7 +5948,7 @@ app.post(`${PREFIX}/agent/subscribe/:uid`, async (c) => {
     if (!profile) return c.json({ error: "Client introuvable" }, 404);
     const now = new Date().toISOString();
     const contract = {
-      id: `c_${Date.now()}`,
+      id: `c_${Date.now()}_${secureRandomString(4)}`,
       product,
       status: "active",
       startDate: now,
@@ -6059,7 +6088,7 @@ app.post(`${PREFIX}/agent/customer/:uid/beneficiaries`, async (c) => {
     if (name.length < 2) return c.json({ error: "Nom invalide" }, 400);
     if (!relation) return c.json({ error: "Relation requise" }, 400);
     const beneficiary = {
-      id: `b_${Date.now()}`,
+      id: `b_${Date.now()}_${secureRandomString(4)}`,
       name,
       relation,
       birthDate,
@@ -7237,7 +7266,7 @@ app.post(`${PREFIX}/kyc`, async (c) => {
     const type = ["identite", "adresse", "revenu"].includes(body?.type) ? body.type : "identite";
     const bundle = await getKycBundle(r.user.id);
     const next: KycRequest = {
-      id: `kyc_${Date.now()}`,
+      id: `kyc_${Date.now()}_${secureRandomString(4)}`,
       type,
       status: "pending",
       fields,
@@ -7581,7 +7610,6 @@ app.post(`${PREFIX}/admin/kyc/:userId/:kycId/decision`, async (c) => {
       if (profile?.email) {
         const APP_URL = Deno.env.get("APP_URL") ?? "https://app.ippoo.bj";
         const link = `${APP_URL}/espace-client/kyc?reprise=1&ref=${encodeURIComponent(kycId)}`;
-        const esc = (s: string) => String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
         const safeNote = esc(note || "Pièces non lisibles ou incomplètes.");
         const html = `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:auto">
           <h2 style="color:#FF3B57">Vérification d'identité à refaire</h2>
@@ -8300,7 +8328,7 @@ app.post(`${PREFIX}/agent/visits/:uid`, async (c) => {
     const key = `agent:visits:${uid}`;
     const list = ((await kv.get(key)) ?? []) as any[];
     const entry = {
-      id: `v_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `v_${Date.now()}_${secureRandomString(4)}`,
       agentId: r.agent.id, matricule: r.agent.matricule,
       lat, lng, accuracy, note,
       at: new Date().toISOString(),
@@ -8880,7 +8908,7 @@ app.post(`${PREFIX}/admin/payments/:userId/:paymentId/send-invoice`, async (c) =
   const amount = new Intl.NumberFormat("fr-FR").format(payment.amount) + " FCFA";
   const html = `<div style="font-family:system-ui,sans-serif;max-width:600px;margin:auto;padding:24px;color:#191923">
     <h1 style="color:#D84332;letter-spacing:-0.02em">FACTURE ${invNo}</h1>
-    <p>Bonjour ${profile.name || profile.firstName || "membre"},</p>
+    <p>Bonjour ${esc(profile.name || profile.firstName || "membre")},</p>
     <p>Veuillez trouver le récapitulatif de votre paiement IPPOO ASSURANCE :</p>
     <table style="width:100%;border-collapse:collapse;margin:16px 0">
       <tr><td style="padding:8px;border-bottom:1px solid #eee"><b>Date</b></td><td style="padding:8px;border-bottom:1px solid #eee">${dateStr}</td></tr>
@@ -8934,7 +8962,7 @@ async function logWebhookEvent(opts: {
   metadata?: Record<string, any>;
 }) {
   try {
-    const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `wh_${Date.now()}_${secureRandomString(4)}`;
     const headers: Record<string, string> = {};
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
