@@ -31,6 +31,28 @@ app.use(
 
 const PREFIX = "/make-server-752d1a39";
 
+/** Secure random integer in [min, max] range using CSPRNG. */
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return min + (array[0] % range);
+}
+
+/** Sanitize 500 error responses and log actual error details. */
+function safeError(c: any, err: any, message: string, status = 500) {
+  console.error(`[Error] ${message}:`, err);
+  return c.json({ error: message }, status);
+}
+
+/** Minimal HTML escaping for security-sensitive outputs (emails, PDFs). */
+const esc = (s: string) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (ch) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string)
+  );
+
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
 // d'exiger un Scheduler externe, on déclenche le cycle au plus toutes les
 // 15 minutes lors d'une requête entrante. Le verrou KV (`reminders:auto:lock`)
@@ -281,7 +303,7 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -982,8 +1004,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     }
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return safeError(c, err, "Erreur serveur lors de l'inscription");
   }
 });
 
@@ -1041,7 +1062,7 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
@@ -2663,8 +2684,7 @@ app.post(`${PREFIX}/auth/qr-login`, async (c) => {
       actionLink: data.properties?.action_link,
     });
   } catch (err) {
-    console.log(`QR login error: ${err}`);
-    return c.json({ error: `Erreur QR: ${err}` }, 500);
+    return safeError(c, err, "Erreur QR");
   }
 });
 
@@ -2722,8 +2742,7 @@ app.post(`${PREFIX}/auth/webauthn/register/verify`, async (c) => {
     await audit(user.id, "auth.webauthn.register", {});
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`WebAuthn register verify error: ${err}`);
-    return c.json({ error: `Erreur d'enregistrement biométrique: ${err}` }, 500);
+    return safeError(c, err, "Erreur d'enregistrement biométrique");
   }
 });
 
@@ -2790,8 +2809,7 @@ app.post(`${PREFIX}/auth/webauthn/login/verify`, async (c) => {
       tokenHash: data.properties?.hashed_token,
     });
   } catch (err) {
-    console.log(`WebAuthn auth verify error: ${err}`);
-    return c.json({ error: `Erreur de vérification biométrique: ${err}` }, 500);
+    return safeError(c, err, "Erreur de vérification biométrique");
   }
 });
 
@@ -7581,7 +7599,6 @@ app.post(`${PREFIX}/admin/kyc/:userId/:kycId/decision`, async (c) => {
       if (profile?.email) {
         const APP_URL = Deno.env.get("APP_URL") ?? "https://app.ippoo.bj";
         const link = `${APP_URL}/espace-client/kyc?reprise=1&ref=${encodeURIComponent(kycId)}`;
-        const esc = (s: string) => String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
         const safeNote = esc(note || "Pièces non lisibles ou incomplètes.");
         const html = `<div style="font-family:system-ui,sans-serif;max-width:520px;margin:auto">
           <h2 style="color:#FF3B57">Vérification d'identité à refaire</h2>
