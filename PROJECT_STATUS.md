@@ -195,7 +195,7 @@ Tarif unique : **500 FCFA / jour × 31 jours = 15 500 FCFA / mois** pour les 11 
   - Endpoints `GET /agent/2fa` (status), `POST /agent/2fa/enroll` (génère secret + URI otpauth), `POST /agent/2fa/activate` (vérifie premier code, renvoie token de session HMAC 8 h), `POST /agent/2fa/verify` (challenge), `POST /agent/2fa/disable` (exige un code TOTP courant).
   - `/agent/me` retourne `twoFactor: { enrolled, verified, required }`.
   - Helper serveur `requireAgent2FA(c, agentId)` câblé sur les endpoints sensibles : `POST /agent/payments/:uid`, `POST /agent/subscribe/:uid`, `POST /agent/claims/:userId/:claimId/status`, `POST /agent/kyc/:userId/:kycId/decision`. Refus 401 `twofactor-required` sans token de session valide.
-  - Frontend : `apiFetch` injecte automatiquement `X-Agent-2FA-Token` (sessionStorage) sur tous les appels `/agent/*`. `AgentShell` gate l'arbre derrière `<Agent2FAChallenge />` quand `enrolled && !verified`. Section TOTP complète dans `AgentProfilePage` (QR code via api.qrserver.com, secret affiché en clair, premier code de confirmation, désactivation protégée). Token effacé sur tout signOut.
+  - Frontend : `apiFetch` injecte automatiquement `X-Agent-2FA-Token` (sessionStorage) sur tous les appels `/agent/*`. `AgentShell` gate l'arbre derrière `<Agent2FAChallenge />` quand `enrolled && !verified`. Section TOTP complète dans `AgentProfilePage` (QR code généré localement pour la sécurité, secret affiché en clair, premier code de confirmation, désactivation protégée). Token effacé sur tout signOut.
   - Env optionnel `AGENT_2FA_REQUIRED=1` exposé via `/agent/me` pour permettre, demain, de bloquer l'inscription d'un conseiller sans 2FA active.
 
 ### 2.4.sexdecies Batch F17 → F20 — espace client P0/P1 (✅ session du 2026-05-30)
