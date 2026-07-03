@@ -31,6 +31,24 @@ app.use(
 
 const PREFIX = "/make-server-752d1a39";
 
+/**
+ * Returns a cryptographically secure random integer between min and max (inclusive).
+ */
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return min + (array[0] % range);
+}
+
+/**
+ * Sanitizes error messages to prevent leaking internal details to the client.
+ */
+function safeError(err: unknown, fallback: string): string {
+  console.error("[Sentinel] Intercepted error:", err);
+  return fallback;
+}
+
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
 // d'exiger un Scheduler externe, on déclenche le cycle au plus toutes les
 // 15 minutes lors d'une requête entrante. Le verrou KV (`reminders:auto:lock`)
@@ -982,8 +1000,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     }
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur serveur lors de l'inscription") }, 500);
   }
 });
 
@@ -1041,7 +1058,7 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
@@ -1157,8 +1174,7 @@ app.post(`${PREFIX}/profile/avatar`, async (c) => {
     await audit(user.id, "profile.avatar.upload", { size: file.size, mime: file.type });
     return c.json({ profile: await withAvatarUrl(next) });
   } catch (err) {
-    console.log(`Avatar upload error for ${user.id}: ${err}`);
-    return c.json({ error: `${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur lors de l'envoi de l'avatar") }, 500);
   }
 });
 
@@ -1197,8 +1213,7 @@ app.put(`${PREFIX}/me`, async (c) => {
     await kv.set(k.profile(user.id), next);
     return c.json({ profile: next });
   } catch (err) {
-    console.log(`Profile update error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur de mise à jour du profil: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur de mise à jour du profil") }, 500);
   }
 });
 
@@ -1359,8 +1374,7 @@ app.post(`${PREFIX}/claims`, async (c) => {
     }).catch(() => {});
     return c.json({ claim });
   } catch (err) {
-    console.log(`Claim create error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur de création du sinistre: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur de création du sinistre") }, 500);
   }
 });
 
