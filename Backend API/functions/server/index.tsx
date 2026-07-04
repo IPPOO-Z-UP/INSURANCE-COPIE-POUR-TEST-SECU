@@ -31,6 +31,18 @@ app.use(
 
 const PREFIX = "/make-server-752d1a39";
 
+function safeError(err: unknown, publicMsg = "Une erreur interne est survenue"): { error: string } {
+  console.log("[safeError]", err);
+  return { error: publicMsg };
+}
+
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return min + (array[0] % range);
+}
+
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
 // d'exiger un Scheduler externe, on déclenche le cycle au plus toutes les
 // 15 minutes lors d'une requête entrante. Le verrou KV (`reminders:auto:lock`)
@@ -281,7 +293,7 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -524,7 +536,7 @@ async function adminAudit(c: any, admin: { username: string; role?: string }, ac
   try {
     const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
-    const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `aa_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const at = new Date().toISOString();
     const prevHash = (((await kv.get(k.auditChainTip())) ?? "GENESIS") as string);
     const canonical = JSON.stringify({ id, username: admin.username, role: admin.role ?? "superadmin", action, meta, ip, ua, at });
@@ -546,7 +558,7 @@ async function audit(uid: string, action: string, meta: Record<string, any> = {}
   try {
     const list = (await kv.get(k.audit(uid))) ?? [];
     list.unshift({
-      id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `a_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
       action,
       meta,
       at: new Date().toISOString(),
@@ -592,13 +604,13 @@ async function guardRate(
 
 function makeReferralCode(name: string) {
   const base = (name || "IPPOO").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4).padEnd(4, "X");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const rand = crypto.randomUUID().slice(0, 4).toUpperCase();
   return `${base}-${rand}`;
 }
 
 function notify(notifications: any[], title: string, body: string, type = "info", to?: string) {
   notifications.unshift({
-    id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    id: `n_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
     title,
     body,
     type,
@@ -982,8 +994,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     }
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return c.json(safeError(err, "Erreur serveur lors de l'inscription"), 500);
   }
 });
 
@@ -1041,14 +1052,13 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = secureRandomInt(100000, 999999).toString();
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
     return c.json({ ok: true, sent, gated: !TERMII_KEY }, 200);
   } catch (err) {
-    console.log(`OTP send error: ${err}`);
-    return c.json({ error: "Erreur lors de l'envoi du code" }, 500);
+    return c.json(safeError(err, "Erreur lors de l'envoi du code"), 500);
   }
 });
 app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
@@ -1075,8 +1085,7 @@ app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
     const proof = `${b64urlEncode(enc.encode(payload))}.${b64urlEncode(new Uint8Array(sig))}`;
     return c.json({ ok: true, verified: true, proof, ttlSec: 300 });
   } catch (err) {
-    console.log(`OTP verify error: ${err}`);
-    return c.json({ error: "Erreur de vérification" }, 500);
+    return c.json(safeError(err, "Erreur de vérification"), 500);
   }
 });
 
@@ -1409,7 +1418,7 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
       payment = payments[idx];
     } else {
       payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
         contractId: contractId ?? null,
         amount,
         currency: "XOF",
@@ -1649,7 +1658,7 @@ app.post(`${PREFIX}/payments`, async (c) => {
     if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
     const { contractId, amount, method } = parsed.data;
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
       contractId: contractId ?? null,
       amount,
       currency: "XOF",
@@ -2295,7 +2304,7 @@ app.post(`${PREFIX}/contracts/:id/renew`, async (c) => {
     const publicKey = Deno.env.get("KKIAPAY_PUBLIC_KEY") ?? "";
     const mode: "kkiapay" | "mock" = publicKey ? "kkiapay" : "mock";
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
       contractId: ct.id,
       amount: ct.premium,
       currency: ct.currency ?? "XOF",
@@ -2591,7 +2600,7 @@ app.post(`${PREFIX}/member-card/activate`, async (c) => {
     const publicKey = Deno.env.get("KKIAPAY_PUBLIC_KEY") ?? "";
     const mode: "kkiapay" | "mock" = publicKey ? "kkiapay" : "mock";
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
       contractId: null,
       amount: BILLING.cardFee,
       currency: "XOF",
@@ -3906,7 +3915,7 @@ async function runMonthlyBillingCycle(triggeredBy: string) {
       );
       if (already) { skipped++; continue; }
       const payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
         contractId: ct.id,
         amount: ct.premium,
         currency: ct.currency ?? "XOF",
@@ -4547,7 +4556,7 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
   if (!g.admin) return c.json({ error: g.error }, g.status);
   try {
     const email = "demo.client@ippoo.local";
-    const password = `Demo!${Math.random().toString(36).slice(2, 8)}`;
+    const password = `Demo!${crypto.randomUUID().slice(0, 8)}`;
     const existingUid = await kv.get(k.emailToUid(email));
     let uid: string;
     if (existingUid) {
@@ -8300,7 +8309,7 @@ app.post(`${PREFIX}/agent/visits/:uid`, async (c) => {
     const key = `agent:visits:${uid}`;
     const list = ((await kv.get(key)) ?? []) as any[];
     const entry = {
-      id: `v_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `v_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
       agentId: r.agent.id, matricule: r.agent.matricule,
       lat, lng, accuracy, note,
       at: new Date().toISOString(),
@@ -8934,7 +8943,7 @@ async function logWebhookEvent(opts: {
   metadata?: Record<string, any>;
 }) {
   try {
-    const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `wh_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const headers: Record<string, string> = {};
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
