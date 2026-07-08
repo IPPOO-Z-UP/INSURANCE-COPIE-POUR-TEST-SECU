@@ -31,6 +31,32 @@ app.use(
 
 const PREFIX = "/make-server-752d1a39";
 
+/** Mask internal error details from the client while logging them for devs. */
+function safeError(err: unknown, fallback = "Une erreur est survenue") {
+  console.error(err);
+  return fallback;
+}
+
+/** Secure random integer between min and max (inclusive). */
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  return min + (array[0] % range);
+}
+
+/** Secure random alphanumeric suffix of given length. */
+function secureRandomSuffix(len = 4): string {
+  const array = new Uint8Array(len);
+  crypto.getRandomValues(array);
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < len; i++) {
+    result += chars[array[i] % chars.length];
+  }
+  return result;
+}
+
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
 // d'exiger un Scheduler externe, on déclenche le cycle au plus toutes les
 // 15 minutes lors d'une requête entrante. Le verrou KV (`reminders:auto:lock`)
@@ -281,7 +307,7 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -524,7 +550,7 @@ async function adminAudit(c: any, admin: { username: string; role?: string }, ac
   try {
     const ip = c?.req?.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
     const ua = (c?.req?.header("user-agent") ?? "").slice(0, 200);
-    const id = `aa_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `aa_${Date.now()}_${secureRandomSuffix(4)}`;
     const at = new Date().toISOString();
     const prevHash = (((await kv.get(k.auditChainTip())) ?? "GENESIS") as string);
     const canonical = JSON.stringify({ id, username: admin.username, role: admin.role ?? "superadmin", action, meta, ip, ua, at });
@@ -546,7 +572,7 @@ async function audit(uid: string, action: string, meta: Record<string, any> = {}
   try {
     const list = (await kv.get(k.audit(uid))) ?? [];
     list.unshift({
-      id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `a_${Date.now()}_${secureRandomSuffix(4)}`,
       action,
       meta,
       at: new Date().toISOString(),
@@ -592,13 +618,13 @@ async function guardRate(
 
 function makeReferralCode(name: string) {
   const base = (name || "IPPOO").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4).padEnd(4, "X");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const rand = secureRandomSuffix(4).toUpperCase();
   return `${base}-${rand}`;
 }
 
 function notify(notifications: any[], title: string, body: string, type = "info", to?: string) {
   notifications.unshift({
-    id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    id: `n_${Date.now()}_${secureRandomSuffix(5)}`,
     title,
     body,
     type,
@@ -982,8 +1008,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
     }
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Signup exception: ${err}`);
-    return c.json({ error: `Erreur serveur lors de l'inscription: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur serveur lors de l'inscription") }, 500);
   }
 });
 
@@ -1041,14 +1066,13 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
     return c.json({ ok: true, sent, gated: !TERMII_KEY }, 200);
   } catch (err) {
-    console.log(`OTP send error: ${err}`);
-    return c.json({ error: "Erreur lors de l'envoi du code" }, 500);
+    return c.json({ error: safeError(err, "Erreur lors de l'envoi du code") }, 500);
   }
 });
 app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
@@ -1075,8 +1099,7 @@ app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
     const proof = `${b64urlEncode(enc.encode(payload))}.${b64urlEncode(new Uint8Array(sig))}`;
     return c.json({ ok: true, verified: true, proof, ttlSec: 300 });
   } catch (err) {
-    console.log(`OTP verify error: ${err}`);
-    return c.json({ error: "Erreur de vérification" }, 500);
+    return c.json({ error: safeError(err, "Erreur de vérification") }, 500);
   }
 });
 
@@ -1157,8 +1180,7 @@ app.post(`${PREFIX}/profile/avatar`, async (c) => {
     await audit(user.id, "profile.avatar.upload", { size: file.size, mime: file.type });
     return c.json({ profile: await withAvatarUrl(next) });
   } catch (err) {
-    console.log(`Avatar upload error for ${user.id}: ${err}`);
-    return c.json({ error: `${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur lors de l'upload de l'avatar") }, 500);
   }
 });
 
@@ -1197,8 +1219,7 @@ app.put(`${PREFIX}/me`, async (c) => {
     await kv.set(k.profile(user.id), next);
     return c.json({ profile: next });
   } catch (err) {
-    console.log(`Profile update error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur de mise à jour du profil: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur de mise à jour du profil") }, 500);
   }
 });
 
@@ -1359,8 +1380,7 @@ app.post(`${PREFIX}/claims`, async (c) => {
     }).catch(() => {});
     return c.json({ claim });
   } catch (err) {
-    console.log(`Claim create error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur de création du sinistre: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur de création du sinistre") }, 500);
   }
 });
 
@@ -1409,7 +1429,7 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
       payment = payments[idx];
     } else {
       payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${secureRandomSuffix(4)}`,
         contractId: contractId ?? null,
         amount,
         currency: "XOF",
@@ -1429,8 +1449,7 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
       kkiapay: { publicKey, sandbox: !Deno.env.get("KKIAPAY_SECRET") },
     });
   } catch (err) {
-    console.log(`Payment initiate error for ${user.id}: ${err}`);
-    return c.json({ error: `Erreur initialisation paiement: ${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur initialisation paiement") }, 500);
   }
 });
 
@@ -1472,8 +1491,7 @@ app.post(`${PREFIX}/payments/webhook`, async (c) => {
     await logWebhookEvent({ provider: "kkiapay", c, status: "ok", httpStatus: 200, rawBody: raw, metadata: { paymentId, userId, next } });
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`Payment webhook error: ${err}`);
-    await logWebhookEvent({ provider: "kkiapay", c, status: "failed", reason: `exception:${err}`, httpStatus: 500, rawBody: raw });
+    await logWebhookEvent({ provider: "kkiapay", c, status: "failed", reason: safeError(err, "Exception webhook"), httpStatus: 500, rawBody: raw });
     return c.json({ error: "Erreur webhook" }, 500);
   }
 });
@@ -1529,8 +1547,7 @@ app.post(`${PREFIX}/payments/webhook/cinetpay`, async (c) => {
     await logWebhookEvent({ provider: "cinetpay", c, status: "ok", httpStatus: 200, rawBody: raw, metadata: { paymentId, userId, success } });
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`cinetpay webhook err: ${err}`);
-    await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: `exception:${err}`, httpStatus: 500, rawBody: raw });
+    await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: safeError(err, "Exception webhook"), httpStatus: 500, rawBody: raw });
     return c.json({ error: "Erreur webhook" }, 500);
   }
 });
@@ -1556,8 +1573,7 @@ app.post(`${PREFIX}/payments/webhook/fedapay`, async (c) => {
     await logWebhookEvent({ provider: "fedapay", c, status: "ok", httpStatus: 200, rawBody: raw, metadata: { paymentId, userId, success } });
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`fedapay webhook err: ${err}`);
-    await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: `exception:${err}`, httpStatus: 500, rawBody: raw });
+    await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: safeError(err, "Exception webhook"), httpStatus: 500, rawBody: raw });
     return c.json({ error: "Erreur webhook" }, 500);
   }
 });
@@ -1581,8 +1597,7 @@ app.post(`${PREFIX}/payments/webhook/mtn`, async (c) => {
     await logWebhookEvent({ provider: "mtn-momo", c, status: "ok", httpStatus: 200, rawBody: raw, metadata: { paymentId, userId, success } });
     return c.json({ ok: true });
   } catch (err) {
-    console.log(`mtn webhook err: ${err}`);
-    await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: `exception:${err}`, httpStatus: 500, rawBody: raw });
+    await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: safeError(err, "Exception webhook"), httpStatus: 500, rawBody: raw });
     return c.json({ error: "Erreur webhook" }, 500);
   }
 });
@@ -1649,7 +1664,7 @@ app.post(`${PREFIX}/payments`, async (c) => {
     if (!parsed.ok) return c.json({ error: parsed.message }, parsed.status);
     const { contractId, amount, method } = parsed.data;
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${secureRandomSuffix(4)}`,
       contractId: contractId ?? null,
       amount,
       currency: "XOF",
@@ -2295,7 +2310,7 @@ app.post(`${PREFIX}/contracts/:id/renew`, async (c) => {
     const publicKey = Deno.env.get("KKIAPAY_PUBLIC_KEY") ?? "";
     const mode: "kkiapay" | "mock" = publicKey ? "kkiapay" : "mock";
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${secureRandomSuffix(4)}`,
       contractId: ct.id,
       amount: ct.premium,
       currency: ct.currency ?? "XOF",
@@ -2524,8 +2539,7 @@ app.post(`${PREFIX}/admin/account/sweep`, async (c) => {
     await adminAudit(c, r.admin, "account.sweep", { deleted: deleted.length });
     return c.json({ deleted: deleted.length, ids: deleted });
   } catch (err) {
-    console.log(`Account sweep error: ${err}`);
-    return c.json({ error: `${err}` }, 500);
+    return c.json({ error: safeError(err, "Erreur balayage des comptes") }, 500);
   }
 });
 
@@ -2591,7 +2605,7 @@ app.post(`${PREFIX}/member-card/activate`, async (c) => {
     const publicKey = Deno.env.get("KKIAPAY_PUBLIC_KEY") ?? "";
     const mode: "kkiapay" | "mock" = publicKey ? "kkiapay" : "mock";
     const payment = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `p_${Date.now()}_${secureRandomSuffix(4)}`,
       contractId: null,
       amount: BILLING.cardFee,
       currency: "XOF",
@@ -3906,7 +3920,7 @@ async function runMonthlyBillingCycle(triggeredBy: string) {
       );
       if (already) { skipped++; continue; }
       const payment = {
-        id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `p_${Date.now()}_${secureRandomSuffix(4)}`,
         contractId: ct.id,
         amount: ct.premium,
         currency: ct.currency ?? "XOF",
@@ -4547,7 +4561,7 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
   if (!g.admin) return c.json({ error: g.error }, g.status);
   try {
     const email = "demo.client@ippoo.local";
-    const password = `Demo!${Math.random().toString(36).slice(2, 8)}`;
+    const password = `Demo!${secureRandomSuffix(6)}`;
     const existingUid = await kv.get(k.emailToUid(email));
     let uid: string;
     if (existingUid) {
@@ -8300,7 +8314,7 @@ app.post(`${PREFIX}/agent/visits/:uid`, async (c) => {
     const key = `agent:visits:${uid}`;
     const list = ((await kv.get(key)) ?? []) as any[];
     const entry = {
-      id: `v_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: `v_${Date.now()}_${secureRandomSuffix(4)}`,
       agentId: r.agent.id, matricule: r.agent.matricule,
       lat, lng, accuracy, note,
       at: new Date().toISOString(),
@@ -8934,7 +8948,7 @@ async function logWebhookEvent(opts: {
   metadata?: Record<string, any>;
 }) {
   try {
-    const id = `wh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const id = `wh_${Date.now()}_${secureRandomSuffix(4)}`;
     const headers: Record<string, string> = {};
     try {
       const raw = (opts.c?.req?.raw?.headers ?? opts.c?.req?.header) as any;
