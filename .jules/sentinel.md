@@ -1,0 +1,4 @@
+## 2026-07-24 - Cryptographically Secure Random Number Generation and Error Handling standard
+**Vulnerability:** Weak random number generation using `Math.random()` for critical items such as phone OTP codes and agent matricules, which makes them predictable. Also, loose error logging where raw internal details can be leaked.
+**Learning:** `Math.random()` is not secure for security-sensitive tokens, keys, and numeric codes. Utilizing standard Node or Web Crypto APIs (like `crypto.getRandomValues`) guarantees cryptographically secure randomness.
+**Prevention:** Always use secure helpers `secureRandomInt` and `secureRandomSuffix` for generating numeric keys and security-sensitive tokens, and use a standard `safeError` helper to avoid leaking stack traces or database details to clients on failure.
