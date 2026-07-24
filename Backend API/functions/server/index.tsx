@@ -31,6 +31,26 @@ app.use(
 
 const PREFIX = "/make-server-752d1a39";
 
+// Secure error handling and cryptographically secure randomness utilities
+function safeError(c: any, err: any, customMessage = "Une erreur interne est survenue. Réessayez plus tard.", status = 500) {
+  console.log("Internal error:", err);
+  return c.json({ error: customMessage }, status);
+}
+
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  return min + (arr[0] % range);
+}
+
+function secureRandomSuffix(length: number): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const arr = new Uint8Array(length);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (b) => chars[b % chars.length]).join("");
+}
+
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
 // d'exiger un Scheduler externe, on déclenche le cycle au plus toutes les
 // 15 minutes lors d'une requête entrante. Le verrou KV (`reminders:auto:lock`)
@@ -281,7 +301,7 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -1041,14 +1061,13 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
     return c.json({ ok: true, sent, gated: !TERMII_KEY }, 200);
   } catch (err) {
-    console.log(`OTP send error: ${err}`);
-    return c.json({ error: "Erreur lors de l'envoi du code" }, 500);
+    return safeError(c, err, "Erreur lors de l'envoi du code");
   }
 });
 app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
@@ -1075,8 +1094,7 @@ app.post(`${PREFIX}/phone/otp/verify`, async (c) => {
     const proof = `${b64urlEncode(enc.encode(payload))}.${b64urlEncode(new Uint8Array(sig))}`;
     return c.json({ ok: true, verified: true, proof, ttlSec: 300 });
   } catch (err) {
-    console.log(`OTP verify error: ${err}`);
-    return c.json({ error: "Erreur de vérification" }, 500);
+    return safeError(c, err, "Erreur de vérification");
   }
 });
 
