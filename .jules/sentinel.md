@@ -1,0 +1,4 @@
+## 2026-07-25 - Secure Randomness Implementation
+**Vulnerability:** Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG) `Math.random()` (CWE-338) for security-sensitive operations, specifically generating 2FA OTP codes, Agent Matricules, administrative passwords, payment identifiers, audit chain events, and notification/visit IDs.
+**Learning:** Legacy developers relied on standard JavaScript `Math.random()`, which is predictable and not suitable for cryptographically secure requirements. In a Deno / Supabase Edge Functions backend, standard Web Crypto APIs (`crypto.getRandomValues`) should be leveraged for secure, unbiased random integer and suffix generation.
+**Prevention:** Establish a strict security standard to always use `secureRandomInt` and `secureRandomSuffix` helpers in the backend (`index.tsx`) rather than `Math.random()` for any user-facing IDs, codes, or secrets.
