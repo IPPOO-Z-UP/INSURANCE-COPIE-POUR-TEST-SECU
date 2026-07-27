@@ -1,0 +1,4 @@
+## 2026-05-30 - Cryptographically Secure Randomness and Information Leakage Prevention
+**Vulnerability:** Weak pseudo-random number generator (`Math.random()`) used for sensitive operations like generating One-Time Passwords (OTPs) and agent matricules, exposing the system to sequence prediction attacks. Additionally, verbose error logging directly inside HTTP responses was leaking internal system/database details.
+**Learning:** Developing custom cryptographic utilities (`secureRandomInt`, `secureRandomSuffix`) using `crypto.getRandomValues` guarantees sequence unpredictability. Wrapping endpoint exceptions in a central, standardized French `safeError` handler prevents internal details from being exposed to the client on failure.
+**Prevention:** Always mandate cryptographically secure PRNGs for security-sensitive fields (pins, codes, tokens) and decouple internal log serialization from client response messages to strictly prevent system detail leakage.
