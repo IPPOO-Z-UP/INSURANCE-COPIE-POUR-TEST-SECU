@@ -1,0 +1,4 @@
+## 2026-08-05 - Insecure Randomness in OTP, Matricules, and IDs
+**Vulnerability:** The application used `Math.random()` to generate critical and security-sensitive secrets and identifiers, such as SMS OTP verification codes (predictable 6-digit codes), agent matricules, administrative audit logs, and transaction/payment tracking IDs.
+**Learning:** `Math.random()` is not cryptographically secure and produces predictable outputs. If an attacker can determine the internal PRNG state of the running runtime, they can predict future OTPs, leading to multi-factor authentication bypass, or brute-force tracking identifiers.
+**Prevention:** Always use cryptographically secure random number generators (CSPRNG), such as Web Crypto's `crypto.getRandomValues()`, when generating any security-critical tokens, codes, passwords, or identifiers.
