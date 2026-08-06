@@ -1,0 +1,6 @@
+# Sentinel Security Journal
+
+## 2026-05-30 - Cryptographically Insecure Pseudo-Random Number Generation (PRNG)
+**Vulnerability:** The application was using the standard, cryptographically insecure `Math.random()` to generate sensitive security tokens and identifiers. This included SMS OTP codes (one-time passwords), auto-generated passwords for the demo seeding feature, matricules for insurance agents, and various system-wide transaction IDs (payment, visit, and webhook IDs). Insecure PRNGs are predictable, allowing attackers who observe a sequence of values to predict future values, posing risks of OTP bypass, account takeovers, and ID collisions or enumeration.
+**Learning:** `Math.random()` was chosen during initial rapid prototyping for its simplicity and ease of use in JavaScript/TypeScript. However, as the application matured to handle micro-assurance, real money transactions, and administrative operations, the vulnerability persisted, presenting a security gap in the core platform.
+**Prevention:** Always use cryptographically secure random number generators (CSPRNG) like `crypto.getRandomValues()` for any security-sensitive operations. Standardize security utilities such as `secureRandomInt` and `secureRandomSuffix` early in the development lifecycle and strictly enforce their usage via linting rules or code reviews.
