@@ -1,0 +1,4 @@
+## 2025-08-07 - Insecure Randomness via Math.random()
+**Vulnerability:** The application used standard pseudo-random number generation (`Math.random()`) for security-sensitive values, including OTP validation codes, default user passwords, agent matricule numbers, referral codes, and audit log identifiers.
+**Learning:** Standard pseudo-random number generators (PRNGs) like `Math.random()` are not cryptographically secure and produce predictable sequences of numbers, potentially allowing attackers to predict OTPs, hijack accounts via leaked/guessed default passwords, or guess referral and audit IDs.
+**Prevention:** Always use cryptographically secure random number generators (CSPRNGs) such as the Web Crypto API (`crypto.getRandomValues()` or `crypto.randomUUID()`) to generate security-sensitive tokens, identifiers, codes, and credentials.
