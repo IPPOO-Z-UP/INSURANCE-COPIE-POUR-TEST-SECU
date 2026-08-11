@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Save, KeyRound, Eye, EyeOff, RefreshCw, LogOut, ShieldCheck, ShieldOff, Bell, BellOff } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { pushStatus, isSubscribed, subscribeToPush, unsubscribeFromPush } from "../../espace-client/push";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../espace-client/AuthContext";
@@ -357,10 +358,6 @@ function TwoFactorSection({ token }: { token: string }) {
     } finally { setBusy(false); }
   }
 
-  const qrUrl = enrollData
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(enrollData.otpauth)}`
-    : null;
-
   return (
     <section
       className="rounded-3xl p-4 mb-3"
@@ -390,8 +387,10 @@ function TwoFactorSection({ token }: { token: string }) {
       {enrollData && (
         <div>
           <div className="flex flex-col sm:flex-row gap-4 items-center">
-            {qrUrl && (
-              <img src={qrUrl} alt="QR TOTP" width={180} height={180} className="rounded-xl border" style={{ borderColor: "var(--line-hairline)" }} />
+            {enrollData.otpauth && (
+              <div className="p-2 bg-white rounded-xl border flex items-center justify-center" style={{ borderColor: "var(--line-hairline)", width: 180, height: 180 }}>
+                <QRCodeSVG value={enrollData.otpauth} size={164} level="M" />
+              </div>
             )}
             <div className="flex-1 min-w-0">
               <p style={{ fontSize: "0.78rem", color: "var(--ippoo-text-muted)" }}>
