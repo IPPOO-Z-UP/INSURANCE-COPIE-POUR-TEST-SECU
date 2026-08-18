@@ -281,7 +281,7 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -415,6 +415,23 @@ function b64urlDecode(s: string): Uint8Array {
   const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
   const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+// Cryptographically secure random helpers
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const maxUnbiased = Math.floor(0x100000000 / range) * range;
+  const array = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(array);
+  } while (array[0] >= maxUnbiased);
+  return min + (array[0] % range);
+}
+
+function secureRandomSuffix(length: number = 6): string {
+  const buf = new Uint8Array(length);
+  crypto.getRandomValues(buf);
+  return b64urlEncode(buf).slice(0, length);
 }
 // #12 — Rotation HMAC. La signature utilise toujours la clé primaire (KV
 // `system:hmac:secret`). La vérification accepte aussi `system:hmac:secret:prev`
@@ -1041,7 +1058,7 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
