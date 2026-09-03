@@ -4547,7 +4547,10 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
   if (!g.admin) return c.json({ error: g.error }, g.status);
   try {
     const email = "demo.client@ippoo.local";
-    const password = `Demo!${Math.random().toString(36).slice(2, 8)}`;
+    // Cryptographically secure password generation using Web Crypto
+    const pwdBuf = new Uint8Array(8);
+    crypto.getRandomValues(pwdBuf);
+    const password = `Demo!${b64urlEncode(pwdBuf).slice(0, 8)}`;
     const existingUid = await kv.get(k.emailToUid(email));
     let uid: string;
     if (existingUid) {
