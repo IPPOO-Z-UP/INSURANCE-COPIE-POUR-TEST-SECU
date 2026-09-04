@@ -281,7 +281,9 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    const rnd = new Uint32Array(1);
+    crypto.getRandomValues(rnd);
+    const n = 1000 + (rnd[0] % 9000);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -1041,7 +1043,9 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const otpBuf = new Uint32Array(1);
+    crypto.getRandomValues(otpBuf);
+    const code = String(100000 + (otpBuf[0] % 900000));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
@@ -4547,7 +4551,9 @@ app.post(`${PREFIX}/admin/dev/seed-demo`, async (c) => {
   if (!g.admin) return c.json({ error: g.error }, g.status);
   try {
     const email = "demo.client@ippoo.local";
-    const password = `Demo!${Math.random().toString(36).slice(2, 8)}`;
+    const passBuf = new Uint8Array(6);
+    crypto.getRandomValues(passBuf);
+    const password = `Demo!${Array.from(passBuf, b => b.toString(36)[0] || "x").join("")}`;
     const existingUid = await kv.get(k.emailToUid(email));
     let uid: string;
     if (existingUid) {
