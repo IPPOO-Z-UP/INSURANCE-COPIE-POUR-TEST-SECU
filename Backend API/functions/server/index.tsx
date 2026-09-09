@@ -281,7 +281,11 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    // Security: Use cryptographically secure Web Crypto API instead of Math.random()
+    // to generate unpredictable agent matricules.
+    const randomArray = new Uint32Array(1);
+    crypto.getRandomValues(randomArray);
+    const n = 1000 + (randomArray[0] % 9000);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
