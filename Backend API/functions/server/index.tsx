@@ -29,6 +29,20 @@ app.use(
   }),
 );
 
+// Security headers middleware & secure global error handler
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+});
+
+app.onError((err, c) => {
+  console.error("Unhandled server error:", err);
+  return c.json({ error: "Erreur interne du serveur" }, 500);
+});
+
 const PREFIX = "/make-server-752d1a39";
 
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
