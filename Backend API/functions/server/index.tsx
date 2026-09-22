@@ -402,9 +402,30 @@ async function sendSms(to: string, text: string): Promise<boolean> {
   } catch { return false; }
 }
 
-// --- HMAC signing for QR tokens ---
+// --- Constant-time comparison for secrets / signatures ---
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = enc.encode(a);
+  const bufB = enc.encode(b);
+  let result = bufA.length ^ bufB.length;
+  const len = Math.max(bufA.length, bufB.length);
+  for (let i = 0; i < len; i++) {
+    result |= (bufA[i % bufA.length] ?? 0) ^ (bufB[i % bufB.length] ?? 0);
+  }
+  return result === 0;
+}
+
+function verifyCronSecret(c: any): boolean {
+  const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
+  const secret = Deno.env.get("CRON_SECRET") ?? "";
+  if (!secret) return false;
+  return timingSafeEqualStr(provided, secret);
+}
+
+// --- HMAC signing for QR tokens ---
 function b64urlEncode(bytes: Uint8Array | ArrayBuffer): string {
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let bin = "";
@@ -1441,7 +1462,7 @@ app.post(`${PREFIX}/payments/webhook`, async (c) => {
   try {
     const secret = Deno.env.get("KKIAPAY_SECRET");
     const provided = c.req.header("X-Kkiapay-Secret") ?? c.req.header("x-kkiapay-secret") ?? "";
-    if (!secret || provided !== secret) {
+    if (!secret || !timingSafeEqualStr(provided, secret)) {
       await logWebhookEvent({ provider: "kkiapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw });
       return c.json({ error: "Signature invalide" }, 401);
     }
@@ -1517,7 +1538,7 @@ app.post(`${PREFIX}/payments/webhook/cinetpay`, async (c) => {
     if (!secret) { await logWebhookEvent({ provider: "cinetpay", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const sig = c.req.header("x-token") ?? "";
     const expected = await hmacHex(secret, raw);
-    if (sig !== expected) { await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
+    if (!timingSafeEqualStr(sig, expected)) { await logWebhookEvent({ provider: "cinetpay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.cpm_custom ?? body?.metadata?.paymentId;
     const userId = body?.metadata?.userId;
@@ -1543,7 +1564,7 @@ app.post(`${PREFIX}/payments/webhook/fedapay`, async (c) => {
     if (!secret) { await logWebhookEvent({ provider: "fedapay", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const sig = c.req.header("x-fedapay-signature") ?? "";
     const expected = await hmacHex(secret, raw);
-    if (sig !== expected) { await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
+    if (!timingSafeEqualStr(sig, expected)) { await logWebhookEvent({ provider: "fedapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Signature invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const entity = body?.entity ?? body;
     const paymentId = entity?.custom_metadata?.paymentId;
@@ -1569,7 +1590,7 @@ app.post(`${PREFIX}/payments/webhook/mtn`, async (c) => {
     const key = Deno.env.get("MTN_MOMO_CALLBACK_KEY");
     if (!key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "skipped", reason: "not-configured", httpStatus: 503, rawBody: raw }); return c.json({ error: "Provider non configuré" }, 503); }
     const provided = c.req.header("x-callback-key") ?? "";
-    if (provided !== key) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
+    if (!timingSafeEqualStr(provided, key)) { await logWebhookEvent({ provider: "mtn-momo", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw }); return c.json({ error: "Clé invalide" }, 401); }
     const body = raw ? JSON.parse(raw) : {};
     const paymentId = body?.externalId ?? body?.payerMessage;
     const userId = body?.payer?.partyId ? null : body?.metadata?.userId;
@@ -4413,9 +4434,7 @@ app.post(`${PREFIX}/admin/reminders/run`, async (c) => {
 });
 
 app.post(`${PREFIX}/reminders/cron`, async (c) => {
-  const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
-  const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!verifyCronSecret(c)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runRemindersCycle("cron");
     return c.json({ ok: true, ...res });
@@ -4430,9 +4449,7 @@ app.post(`${PREFIX}/reminders/cron`, async (c) => {
 // matricule. Idempotence : marque `notifiedAt` sur la tâche pour ne pas
 // renvoyer le même rappel à chaque tick.
 app.post(`${PREFIX}/agent/tasks/remind/cron`, async (c) => {
-  const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
-  const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!verifyCronSecret(c)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const { data, error } = await admin
       .from("kv_store_752d1a39")
@@ -4481,9 +4498,7 @@ app.post(`${PREFIX}/agent/tasks/remind/cron`, async (c) => {
 // #8 — Cron sweep suppression 30j. Itère sur les demandes `account:deletion:*`
 // et purge celles dont la grâce est écoulée. À planifier 1x/jour.
 app.post(`${PREFIX}/account/sweep-deletions/cron`, async (c) => {
-  const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
-  const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!verifyCronSecret(c)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const { data, error } = await admin
       .from("kv_store_752d1a39")
@@ -4687,9 +4702,7 @@ app.get(`${PREFIX}/admin/client-errors`, async (c) => {
 // bucket avatars (chemin `__backup__/kv-YYYY-MM-DD.ndjson`). Compression
 // gzip via TransformStream pour limiter la taille. À planifier 1x/jour.
 app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
-  const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
-  const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!verifyCronSecret(c)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const day = new Date().toISOString().slice(0, 10);
     const path = `__backup__/kv-${day}.ndjson.gz`;
@@ -4727,9 +4740,7 @@ app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
 // Cron entrypoint protected by CRON_SECRET. Hook to Supabase Scheduled
 // Functions / external cron to fire on the 1st of each month at 09:00 UTC+1.
 app.post(`${PREFIX}/billing/cron`, async (c) => {
-  const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
-  const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!verifyCronSecret(c)) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runMonthlyBillingCycle("cron");
     return c.json({ ok: true, ...res });
