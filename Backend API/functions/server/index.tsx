@@ -29,6 +29,21 @@ app.use(
   }),
 );
 
+// Security Headers middleware - Defense in depth against common web vulnerabilities
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+});
+
+// Global unhandled error handler - Prevent stack trace and internal leak on unhandled errors
+app.onError((err, c) => {
+  console.error("Unhandled error:", err);
+  return c.json({ error: "Internal Server Error" }, 500);
+});
+
 const PREFIX = "/make-server-752d1a39";
 
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
