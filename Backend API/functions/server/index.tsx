@@ -29,6 +29,19 @@ app.use(
   }),
 );
 
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+});
+
+app.onError((err, c) => {
+  console.error("Unhandled server error:", err);
+  return c.json({ error: "Une erreur interne s'est produite." }, 500);
+});
+
 const PREFIX = "/make-server-752d1a39";
 
 // F30 — Auto-scheduler "best effort" pour runRemindersCycle. Plutôt que
@@ -1041,7 +1054,9 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const otpBuf = new Uint32Array(1);
+    crypto.getRandomValues(otpBuf);
+    const code = String(100000 + (otpBuf[0] % 900000));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
