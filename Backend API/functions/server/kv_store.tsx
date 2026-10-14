@@ -312,7 +312,8 @@ async function syncArray(supabase: any, table: string, userId: string, dbRows: a
   const newIds = dbRows.map(r => r.id).filter(Boolean);
   let delQuery = supabase.from(table).delete().eq("user_id", userId);
   if (newIds.length > 0) {
-    delQuery = delQuery.not("id", "in", `(${newIds.map(id => `"${id}"`).join(",")})`);
+    // Pass array directly to PostgREST filter to prevent raw string concatenation/injection risks
+    delQuery = delQuery.not("id", "in", newIds);
   }
   const { error: delErr } = await delQuery;
   if (delErr) throw new Error(delErr.message);
