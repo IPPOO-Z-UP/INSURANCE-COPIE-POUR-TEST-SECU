@@ -21,12 +21,11 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
         <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", color: "#111" }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>Erreur de l'application</h1>
           <p style={{ marginBottom: 12, color: "#666" }}>
-            Détail (la stack complète est dans la console) :
+            Un problème est survenu lors de l'affichage (les détails techniques sont consignés dans la console) :
           </p>
           <pre style={{ background: "#0d1117", color: "#fff", padding: 16, borderRadius: 12, overflow: "auto", fontSize: 12 }}>
             {this.state.error.message}
-            {"\n\n"}
-            {this.state.error.stack ?? ""}
+            {import.meta.env.DEV && this.state.error.stack ? `\n\n${this.state.error.stack}` : ""}
           </pre>
         </div>
       );
