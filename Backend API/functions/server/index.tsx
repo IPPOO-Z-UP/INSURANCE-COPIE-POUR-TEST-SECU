@@ -1033,6 +1033,13 @@ app.get(`${PREFIX}/me`, async (c) => {
 function normalizePhone(raw: string): string {
   return (raw ?? "").replace(/[^\d+]/g, "").replace(/^\+/, "");
 }
+// Cryptographically secure 6-digit OTP generation to prevent PRNG predictability attacks
+function generateSecureOtpCode(): string {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  const num = 100000 + (buf[0] % 900000);
+  return String(num);
+}
 app.post(`${PREFIX}/phone/otp/send`, async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -1041,7 +1048,7 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = generateSecureOtpCode();
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
