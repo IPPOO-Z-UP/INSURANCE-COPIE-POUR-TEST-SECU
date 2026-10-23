@@ -1988,6 +1988,7 @@ app.post(`${PREFIX}/admin/messages/:uid/attachment`, async (c) => {
 app.get(`${PREFIX}/messages/attachment-url`, async (c) => {
   const path = c.req.query("path") ?? "";
   if (!path) return c.json({ error: "path manquant" }, 400);
+  if (path.includes("..")) return c.json({ error: "Chemin invalide" }, 400);
   const adminTok = c.req.header("X-Admin-Token") ?? c.req.header("x-admin-token");
   if (adminTok) {
     const r = await requireAdminToken(c);
