@@ -194,6 +194,19 @@ async function verifyTotp(secret: string, code: string): Promise<boolean> {
   return false;
 }
 
+// Security: Constant-time string comparison to prevent timing side-channel attacks on secret tokens / keys.
+async function safeCompareSecret(provided: string, expected: string): Promise<boolean> {
+  if (!provided || !expected) return false;
+  const enc = new TextEncoder();
+  const hashProvided = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(provided)));
+  const hashExpected = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(expected)));
+  let diff = 0;
+  for (let i = 0; i < hashProvided.length; i++) {
+    diff |= hashProvided[i] ^ hashExpected[i];
+  }
+  return diff === 0;
+}
+
 async function requireAdminToken(c: any) {
   const token = c.req.header("X-Admin-Token") ?? c.req.header("x-admin-token");
   if (!token) return { admin: null, error: "missing-admin-token", status: 401 as const };
@@ -1439,9 +1452,9 @@ app.post(`${PREFIX}/payments/initiate`, async (c) => {
 app.post(`${PREFIX}/payments/webhook`, async (c) => {
   const raw = await c.req.text().catch(() => "");
   try {
-    const secret = Deno.env.get("KKIAPAY_SECRET");
+    const secret = Deno.env.get("KKIAPAY_SECRET") ?? "";
     const provided = c.req.header("X-Kkiapay-Secret") ?? c.req.header("x-kkiapay-secret") ?? "";
-    if (!secret || provided !== secret) {
+    if (!secret || !(await safeCompareSecret(provided, secret))) {
       await logWebhookEvent({ provider: "kkiapay", c, status: "failed", reason: "signature", httpStatus: 401, rawBody: raw });
       return c.json({ error: "Signature invalide" }, 401);
     }
@@ -4415,7 +4428,7 @@ app.post(`${PREFIX}/admin/reminders/run`, async (c) => {
 app.post(`${PREFIX}/reminders/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !(await safeCompareSecret(provided, secret))) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runRemindersCycle("cron");
     return c.json({ ok: true, ...res });
@@ -4432,7 +4445,7 @@ app.post(`${PREFIX}/reminders/cron`, async (c) => {
 app.post(`${PREFIX}/agent/tasks/remind/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !(await safeCompareSecret(provided, secret))) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const { data, error } = await admin
       .from("kv_store_752d1a39")
@@ -4483,7 +4496,7 @@ app.post(`${PREFIX}/agent/tasks/remind/cron`, async (c) => {
 app.post(`${PREFIX}/account/sweep-deletions/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !(await safeCompareSecret(provided, secret))) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const { data, error } = await admin
       .from("kv_store_752d1a39")
@@ -4689,7 +4702,7 @@ app.get(`${PREFIX}/admin/client-errors`, async (c) => {
 app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !(await safeCompareSecret(provided, secret))) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const day = new Date().toISOString().slice(0, 10);
     const path = `__backup__/kv-${day}.ndjson.gz`;
@@ -4729,7 +4742,7 @@ app.post(`${PREFIX}/system/kv-backup/cron`, async (c) => {
 app.post(`${PREFIX}/billing/cron`, async (c) => {
   const provided = c.req.header("X-Cron-Secret") ?? c.req.header("x-cron-secret") ?? "";
   const secret = Deno.env.get("CRON_SECRET") ?? "";
-  if (!secret || provided !== secret) return c.json({ error: "Cron non autorisé" }, 401);
+  if (!secret || !(await safeCompareSecret(provided, secret))) return c.json({ error: "Cron non autorisé" }, 401);
   try {
     const res = await runMonthlyBillingCycle("cron");
     return c.json({ ok: true, ...res });
