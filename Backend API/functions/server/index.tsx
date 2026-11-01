@@ -272,6 +272,19 @@ async function requireAgent(c: any) {
   };
 }
 
+// Cryptographically secure integer generator for tokens, OTPs, and matricules.
+// Math.random() is predictable and must not be used for security-sensitive values.
+function secureRandomInt(min: number, max: number): number {
+  const range = max - min + 1;
+  const maxUint32 = 0xffffffff;
+  const limit = maxUint32 - (maxUint32 % range);
+  const buf = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(buf);
+  } while (buf[0] >= limit);
+  return min + (buf[0] % range);
+}
+
 // Resolve a stable IPPOO-A-XXXX matricule for a given Supabase user id, creating
 // one on first call. We persist two keys:
 //   agent:matricule:<userId>      -> matricule         (lookup direction A)
@@ -281,7 +294,8 @@ async function resolveAgentMatricule(userId: string): Promise<string> {
   const existing = await kv.get(`agent:matricule:${userId}`);
   if (existing && typeof existing === "string") return existing;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = Math.floor(1000 + Math.random() * 9000);
+    // Generate unpredictable agent matricule identifier using CSPRNG
+    const n = secureRandomInt(1000, 9999);
     const candidate = `IPPOO-A-${n}`;
     const claimKey = `agent:matricule-claim:${candidate}`;
     const claimed = await kv.get(claimKey);
@@ -1041,7 +1055,8 @@ app.post(`${PREFIX}/phone/otp/send`, async (c) => {
     const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
     if (!(await rateLimit(`otp-send-ip:${ip}`, 10, 3600))) return c.json({ error: "Trop de demandes, réessayez plus tard." }, 429);
     if (!(await rateLimit(`otp-send-ph:${phone}`, 3, 900))) return c.json({ error: "Trop de codes demandés pour ce numéro." }, 429);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    // Generate cryptographically secure 6-digit OTP code to prevent PRNG sequence prediction attacks
+    const code = String(secureRandomInt(100000, 999999));
     const hash = b64urlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${phone}:${code}`))));
     await kv.set(k.phoneOtp(phone), { hash, attempts: 0, expiresAt: Date.now() + 10 * 60 * 1000 });
     const sent = await sendSms(phone, `IPPOO — votre code de vérification : ${code}. Valable 10 min. Ne le partagez jamais.`);
